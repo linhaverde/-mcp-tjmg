@@ -1,18 +1,28 @@
 import os
 import re
+import random
+import string
 import httpx
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 
+try:
+    import ddddocr
+    _ocr = ddddocr.DdddOcr(show_ad=False)
+    OCR_DISPONIVEL = True
+except Exception:
+    OCR_DISPONIVEL = False
+
 mcp = FastMCP("TJMG Jurisprudência")
 
-BASE = "https://www5.tjmg.jus.br/jurisprudencia"
-FORM_URL = f"{BASE}/formEspelhoAcordao.do"
-SEARCH_URL = f"{BASE}/pesquisaPalavrasEspelhoAcordao.do"
+BASE          = "https://www5.tjmg.jus.br/jurisprudencia"
+FORM_URL      = f"{BASE}/formEspelhoAcordao.do"
+SEARCH_URL    = f"{BASE}/pesquisaPalavrasEspelhoAcordao.do"
+CAPTCHA_IMG   = f"{BASE}/captcha.svl"
+CAPTCHA_DWR   = f"{BASE}/dwr/call/plaincall/ValidacaoCaptchaAction.isCaptchaValid.dwr"
 
-# Códigos fixos do gabinete
-CAMARA_1_CIVEL = "1-1"
-RELATOR_MANOEL = "0-19836"
+CAMARA_1_CIVEL  = "1-1"
+RELATOR_MANOEL  = "0-19836"
 
 HEADERS = {
     "User-Agent": (
@@ -35,151 +45,208 @@ async def buscar_jurisprudencia_tjmg(
     n_resultados: int = 10,
 ) -> str:
     """
-    Busca jurisprudência no portal do TJMG.
+    Busca jurisprudência no portal do TJMG. Resolve o CAPTCHA automaticamente.
 
     Args:
         palavras: Termos de busca. Ex: "responsabilidade civil estado omissão serviço público"
-        escopo: Onde buscar:
+        escopo: Filtro de busca:
             "camara_e_relator" → 1ª Câmara Cível + Des. Manoel dos Reis Morais (padrão)
-            "relator"          → apenas decisões do Des. Manoel dos Reis Morais
+            "relator"          → apenas Des. Manoel dos Reis Morais (qualquer câmara)
             "camara"           → apenas 1ª Câmara Cível (qualquer relator)
-            "tjmg"             → todo o TJMG sem filtro de câmara ou relator
-        data_inicio: Data inicial de julgamento no formato dd/MM/yyyy (opcional)
-        data_fim:    Data final de julgamento no formato dd/MM/yyyy (opcional)
-        n_resultados: Quantidade de resultados desejados (máximo 50, padrão 10)
+            "tjmg"             → todo o TJMG sem filtro
+        data_inicio: Data inicial de julgamento dd/MM/yyyy (opcional)
+        data_fim:    Data final de julgamento dd/MM/yyyy (opcional)
+        n_resultados: Quantidade de resultados, máximo 50 (padrão 10)
 
     Returns:
         Lista de decisões com número do processo, relator, data e ementa.
     """
+    if not OCR_DISPONIVEL:
+        return (
+            "Erro de configuração: biblioteca ddddocr não instalada no servidor. "
+            "Verifique os logs do Render."
+        )
+
     n_resultados = max(1, min(n_resultados, 50))
 
     params = {
-        "numeroRegistro": "1",
-        "totalLinhas": "1",
-        "palavras": palavras,
-        "pesquisarPor": "ementa",
-        "orderByData": "2",
-        "codigoOrgaoJulgador": "",
-        "listaOrgaoJulgador": "",
+        "numeroRegistro":        "1",
+        "totalLinhas":           "1",
+        "palavras":              palavras,
+        "pesquisarPor":          "ementa",
+        "orderByData":           "2",
+        "codigoOrgaoJulgador":   "",
+        "listaOrgaoJulgador":    "",
         "codigoCompostoRelator": "",
-        "listaRelator": "",
-        "classe": "",
-        "codigoAssunto": "",
+        "listaRelator":          "",
+        "classe":                "",
+        "codigoAssunto":         "",
         "dataPublicacaoInicial": "",
-        "dataPublicacaoFinal": "",
+        "dataPublicacaoFinal":   "",
         "dataJulgamentoInicial": data_inicio,
-        "dataJulgamentoFinal": data_fim,
-        "siglaLegislativa": "",
+        "dataJulgamentoFinal":   data_fim,
+        "siglaLegislativa":      "",
         "referenciaLegislativa": "",
-        "numeroRefLegislativa": "",
-        "anoRefLegislativa": "",
-        "legislacao": "",
-        "norma": "",
-        "descNorma": "",
-        "complemento_1": "",
-        "listaPesquisa": "",
+        "numeroRefLegislativa":  "",
+        "anoRefLegislativa":     "",
+        "legislacao":            "",
+        "norma":                 "",
+        "descNorma":             "",
+        "complemento_1":         "",
+        "listaPesquisa":         "",
         "descricaoTextosLegais": "",
-        "observacoes": "",
-        "linhasPorPagina": str(n_resultados),
-        "pesquisaPalavras": "Pesquisar",
+        "observacoes":           "",
+        "linhasPorPagina":       str(n_resultados),
+        "pesquisaPalavras":      "Pesquisar",
     }
 
     if escopo in ("camara", "camara_e_relator"):
         params["listaOrgaoJulgador"] = CAMARA_1_CIVEL
-
     if escopo in ("relator", "camara_e_relator"):
         params["listaRelator"] = RELATOR_MANOEL
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            # Carrega a página do formulário para estabelecer sessão/cookies
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            # Passo 1: carrega formulário para estabelecer sessão/cookies
             await client.get(FORM_URL, headers=HEADERS)
-            # Executa a busca com os cookies de sessão ativos
+
+            # Passo 2: primeira tentativa de busca
             response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-        if response.status_code != 200:
-            return f"Erro HTTP {response.status_code} ao consultar o TJMG. Tente novamente."
+            # Passo 3: resolve CAPTCHA se necessário (até 4 tentativas)
+            for tentativa in range(4):
+                if not _e_pagina_captcha(response.text):
+                    break
+                sucesso = await _resolver_captcha(client)
+                if not sucesso:
+                    # CAPTCHA mal lido — recarrega sessão e tenta de novo
+                    await client.get(FORM_URL, headers=HEADERS)
+                response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-        return _parse_results(response.text, palavras, escopo)
+            if _e_pagina_captcha(response.text):
+                return "Não foi possível resolver o CAPTCHA após 4 tentativas. Tente novamente em alguns segundos."
+
+            return _parse_resultados(response.text, palavras, escopo)
 
     except httpx.TimeoutException:
         return "Tempo limite excedido ao consultar o TJMG. O portal pode estar lento."
     except Exception as e:
-        return f"Erro inesperado: {e}"
+        return f"Erro inesperado ao consultar o TJMG: {e}"
 
 
-def _parse_results(html: str, palavras: str, escopo: str) -> str:
+def _e_pagina_captcha(html: str) -> bool:
+    return "captcha_text" in html or "Digite os n" in html
+
+
+async def _resolver_captcha(client: httpx.AsyncClient) -> bool:
+    """Baixa a imagem do CAPTCHA, resolve via OCR e valida via DWR."""
+
+    # Baixa imagem (cache-buster para garantir imagem fresca)
+    img_url = f"{CAPTCHA_IMG}?{random.random()}"
+    img_resp = await client.get(
+        img_url,
+        headers={**HEADERS, "Referer": SEARCH_URL},
+    )
+    if img_resp.status_code != 200:
+        return False
+
+    # OCR — extrai só os dígitos
+    codigo_bruto = _ocr.classification(img_resp.content)
+    codigo = re.sub(r"\D", "", codigo_bruto)[:5]
+
+    if len(codigo) != 5:
+        return False
+
+    # Valida via DWR (Direct Web Remoting)
+    jsessionid  = client.cookies.get("JSESSIONID", "")
+    script_id   = "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
+
+    dwr_body = (
+        f"callCount=1\n"
+        f"page=/jurisprudencia/pesquisaPalavrasEspelhoAcordao.do\n"
+        f"httpSessionId={jsessionid}\n"
+        f"scriptSessionId={script_id}\n"
+        f"c0-scriptName=ValidacaoCaptchaAction\n"
+        f"c0-methodName=isCaptchaValid\n"
+        f"c0-id=0\n"
+        f"c0-param0=string:{codigo}\n"
+        f"batchId=0\n"
+    )
+
+    dwr_resp = await client.post(
+        CAPTCHA_DWR,
+        content=dwr_body.encode("utf-8"),
+        headers={
+            **HEADERS,
+            "Content-Type": "text/plain",
+            "Referer":      f"{BASE}/pesquisaPalavrasEspelhoAcordao.do",
+        },
+    )
+
+    # Resposta DWR: ...dwr.engine._remoteHandleCallback('0','0',true);
+    return (
+        dwr_resp.status_code == 200
+        and "remoteHandleCallback" in dwr_resp.text
+        and dwr_resp.text.strip().endswith("true);")
+    )
+
+
+def _parse_resultados(html: str, palavras: str, escopo: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-
     for tag in soup(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
 
-    header = f'Jurisprudência TJMG — "{palavras}" [{escopo}]\n{"=" * 60}\n'
+    cabecalho = f'Jurisprudência TJMG — "{palavras}" [{escopo}]\n{"=" * 60}\n'
 
-    # Tenta extrair decisões de tabelas de resultado
-    decisoes = _extrair_de_tabelas(soup)
-
+    decisoes = _extrair_decisoes(soup)
     if not decisoes:
-        # Fallback: extrai texto corrido e tenta identificar blocos de decisão
-        decisoes = _extrair_texto_corrido(soup)
+        texto_limpo = soup.get_text(separator="\n", strip=True)
+        return cabecalho + texto_limpo[:3000] or "Nenhum resultado encontrado."
 
-    if not decisoes:
-        return header + "Nenhum resultado encontrado para os termos pesquisados."
-
-    return header + "\n\n---\n\n".join(decisoes)
+    return cabecalho + "\n\n---\n\n".join(decisoes)
 
 
-def _extrair_de_tabelas(soup: BeautifulSoup) -> list[str]:
-    decisoes = []
-    # Procura células com texto de ementa (padrão TJMG)
-    celulas = soup.find_all("td")
-    bloco_atual = []
+def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
+    decisoes: list[str] = []
+    bloco: list[str] = []
 
-    for cel in celulas:
+    padrao_processo = re.compile(r"\d+\.\d{4}\.\d{2,3}\.\d{6}-\d/\d{3}")
+
+    for cel in soup.find_all("td"):
         texto = cel.get_text(separator=" ", strip=True)
-        if not texto or len(texto) < 20:
+        if not texto or len(texto) < 10:
             continue
 
-        # Padrão: linha com número de processo TJMG (ex: 1.0000.23.000000-0/001)
-        if re.search(r"\d+\.\d{4}\.\d{2}\.\d{6}-\d/\d{3}", texto):
-            if bloco_atual:
-                decisoes.append("\n".join(bloco_atual))
-                bloco_atual = []
-            bloco_atual.append(f"**Processo:** {texto}")
-
-        elif any(p in texto.upper() for p in ["RELATOR", "RELATORA"]):
-            bloco_atual.append(f"**{texto}**")
-
-        elif any(p in texto.upper() for p in ["EMENTA", "EMENT"]):
-            bloco_atual.append(f"**Ementa:** {texto}")
-
-        elif bloco_atual and len(texto) > 50:
-            bloco_atual.append(texto)
-
-    if bloco_atual:
-        decisoes.append("\n".join(bloco_atual))
-
-    return decisoes
-
-
-def _extrair_texto_corrido(soup: BeautifulSoup) -> list[str]:
-    texto_completo = soup.get_text(separator="\n", strip=True)
-    linhas = [l.strip() for l in texto_completo.splitlines() if len(l.strip()) > 15]
-
-    blocos = []
-    bloco = []
-    for linha in linhas:
-        if re.search(r"\d+\.\d{4}\.\d{2}\.\d{6}-\d/\d{3}", linha):
+        if padrao_processo.search(texto):
             if bloco:
-                blocos.append("\n".join(bloco))
-                bloco = []
-        bloco.append(linha)
+                decisoes.append("\n".join(bloco))
+            bloco = [f"**Processo:** {texto}"]
+
+        elif bloco and any(k in texto.upper() for k in ("RELATOR", "RELATORA")):
+            bloco.append(f"**{texto}**")
+
+        elif bloco and len(texto) > 40:
+            bloco.append(texto)
 
     if bloco:
-        blocos.append("\n".join(bloco))
+        decisoes.append("\n".join(bloco))
 
-    # Limita a 500 linhas no total para não estourar o contexto
-    return blocos[:20] if blocos else ["\n".join(linhas[:80])]
+    # Fallback: extrai por blocos de texto com número de processo
+    if not decisoes:
+        texto_total = soup.get_text(separator="\n", strip=True)
+        linhas = [l.strip() for l in texto_total.splitlines() if len(l.strip()) > 10]
+        bloco_fb: list[str] = []
+        for linha in linhas:
+            if padrao_processo.search(linha):
+                if bloco_fb:
+                    decisoes.append("\n".join(bloco_fb))
+                bloco_fb = [linha]
+            elif bloco_fb:
+                bloco_fb.append(linha)
+        if bloco_fb:
+            decisoes.append("\n".join(bloco_fb))
+
+    return decisoes[:30]  # máximo 30 decisões por busca
 
 
 if __name__ == "__main__":
