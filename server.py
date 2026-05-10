@@ -251,6 +251,22 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
 
 if __name__ == "__main__":
     import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+    from starlette.responses import JSONResponse
+
     port = int(os.environ.get("PORT", 10000))
-    app = mcp.streamable_http_app()
+
+    # Health check endpoint — mantém o servidor acordado no Render free
+    async def health(request):
+        return JSONResponse({"status": "ok", "server": "TJMG Jurisprudência"})
+
+    # Monta o app MCP em /mcp e adiciona health check em /
+    mcp_app = mcp.streamable_http_app()
+    app = Starlette(routes=[
+        Route("/", health),
+        Route("/health", health),
+        Mount("/mcp", app=mcp_app),
+    ])
+
     uvicorn.run(app, host="0.0.0.0", port=port)
