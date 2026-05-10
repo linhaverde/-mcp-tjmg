@@ -251,22 +251,20 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
 
 if __name__ == "__main__":
     import uvicorn
-    from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
+    from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
 
     port = int(os.environ.get("PORT", 10000))
 
-    # Health check endpoint — mantém o servidor acordado no Render free
-    async def health(request):
-        return JSONResponse({"status": "ok", "server": "TJMG Jurisprudência"})
+    # Middleware intercepta health check sem interferir nas rotas do MCP
+    class HealthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if request.url.path in ("/", "/health"):
+                return JSONResponse({"status": "ok", "server": "TJMG Jurisprudência MCP"})
+            return await call_next(request)
 
-    # Monta o app MCP em /mcp e adiciona health check em /
+    # mcp_app serve em /mcp internamente — middleware não interfere
     mcp_app = mcp.streamable_http_app()
-    app = Starlette(routes=[
-        Route("/", health),
-        Route("/health", health),
-        Mount("/mcp", app=mcp_app),
-    ])
+    app = HealthMiddleware(mcp_app)
 
     uvicorn.run(app, host="0.0.0.0", port=port)
