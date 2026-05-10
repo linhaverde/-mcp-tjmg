@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: mcp-tjmg
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PORT
+        value: 10000
+    healthCheckPath: /mcp
