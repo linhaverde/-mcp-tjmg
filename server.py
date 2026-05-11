@@ -628,16 +628,23 @@ async def _diag_captcha_raw(palavras: str) -> str:
                                            "Referer": f"{BASE}/pesquisaPalavrasEspelhoAcordao.do"})
         log.append(f"dwr: status={dwr_r.status_code} body={repr(dwr_r.text.strip())}")
 
+        def _html_diag(h: str, label: str) -> str:
+            nenhum = "Nenhum Espelho" in h or "nenhum espelho" in h.lower()
+            trecho = h[int(len(h)*0.35):int(len(h)*0.35)+600]
+            return (
+                f"{label}: len={len(h)} cap={_e_pagina_captcha(h)} res={_tem_resultados(h)} "
+                f"nenhum={nenhum}\n"
+                f"  @35%: {repr(trecho)}"
+            )
+
         if len(codigo) == 5:
             r_cap = await _get_iso(client, SEARCH_URL, {**params, "captcha_text": codigo}, HEADERS)
             h_cap = _decode_html(r_cap)
-            log.append(f"captcha_get: status={r_cap.status_code} len={len(h_cap)} cap={_e_pagina_captcha(h_cap)} res={_tem_resultados(h_cap)}")
-            log.append(f"captcha_get html300={repr(h_cap[:300])}")
+            log.append(_html_diag(h_cap, "captcha_get"))
 
             r2 = await _get_iso(client, SEARCH_URL, params, HEADERS)
             h2 = _decode_html(r2)
-            log.append(f"busca2: status={r2.status_code} len={len(h2)} cap={_e_pagina_captcha(h2)} res={_tem_resultados(h2)}")
-            log.append(f"busca2 html300={repr(h2[:300])}")
+            log.append(_html_diag(h2, "busca2"))
 
             if _tem_resultados(h2):
                 log.append("SUCESSO com CAPTCHA")
@@ -724,8 +731,11 @@ class _HealthASGI:
             return
 
         if path == "/diag-captcha":
-            # Testa com termo acentuado — replica o que o Claude.ai envia via MCP
-            result = await _diag_captcha_raw("prescrição responsabilidade Estado")
+            # Aceita ?q=termo para testar qualquer termo; padrão é termo acentuado
+            qs_raw = scope.get("query_string", b"").decode("utf-8", errors="replace")
+            q_params = dict(urllib.parse.parse_qsl(qs_raw))
+            termos = q_params.get("q", "prescrição responsabilidade Estado")
+            result = await _diag_captcha_raw(termos)
             body = result.encode("utf-8", errors="replace")
             await send({"type": "http.response.start", "status": 200,
                         "headers": [(b"content-type", b"text/plain; charset=utf-8"),
