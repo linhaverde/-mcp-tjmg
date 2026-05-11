@@ -64,7 +64,7 @@ async def buscar_jurisprudencia_tjmg(
     escopo: str = "camara_e_relator",
     data_inicio: str = "",
     data_fim: str = "",
-    n_resultados: int = 10,
+    n_resultados: int = 50,
 ) -> str:
     """
     Busca jurisprudência no portal do TJMG. Resolve o CAPTCHA automaticamente.
@@ -78,7 +78,7 @@ async def buscar_jurisprudencia_tjmg(
             "tjmg"             → todo o TJMG sem filtro
         data_inicio: Data inicial de julgamento dd/MM/yyyy (opcional)
         data_fim:    Data final de julgamento dd/MM/yyyy (opcional)
-        n_resultados: Quantidade de resultados, máximo 50 (padrão 10)
+        n_resultados: Quantidade de resultados, máximo 100 (padrão 50)
 
     Returns:
         Lista numerada de decisões (ex: [1], [2]...) com processo, relator e ementa.
@@ -91,7 +91,7 @@ async def buscar_jurisprudencia_tjmg(
             "Verifique os logs do Render."
         )
 
-    n_resultados = max(1, min(n_resultados, 50))
+    n_resultados = max(1, min(n_resultados, 100))
 
     params = {
         "numeroRegistro":        "1",
@@ -401,7 +401,7 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
         if bloco_fb:
             decisoes.append("\n".join(bloco_fb))
 
-    return decisoes[:30]  # máximo 30 decisões por busca
+    return decisoes[:100]
 
 
 async def _keep_alive():
