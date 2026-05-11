@@ -43,8 +43,9 @@ SEARCH_URL    = f"{BASE}/pesquisaPalavrasEspelhoAcordao.do"
 CAPTCHA_IMG   = f"{BASE}/captcha.svl"
 CAPTCHA_DWR   = f"{BASE}/dwr/call/plaincall/ValidacaoCaptchaAction.isCaptchaValid.dwr"
 
-CAMARA_1_CIVEL  = "1-1"
-RELATOR_MANOEL  = "0-19836"
+CAMARA_1_CIVEL    = "1-1"
+RELATOR_MANOEL    = "0-19836"
+CLASSE_APELACAO   = "8"   # Apelação Cível
 
 HEADERS = {
     "User-Agent": (
@@ -128,6 +129,7 @@ async def buscar_jurisprudencia_tjmg(
         params["listaOrgaoJulgador"] = CAMARA_1_CIVEL
     if escopo in ("relator", "camara_e_relator"):
         params["listaRelator"] = RELATOR_MANOEL
+    params["classe"] = CLASSE_APELACAO
 
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
@@ -297,6 +299,7 @@ async def obter_inteiro_teor_tjmg(
         params["listaOrgaoJulgador"] = CAMARA_1_CIVEL
     if escopo in ("relator", "camara_e_relator"):
         params["listaRelator"] = RELATOR_MANOEL
+    params["classe"] = CLASSE_APELACAO
 
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
