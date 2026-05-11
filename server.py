@@ -135,17 +135,16 @@ async def buscar_jurisprudencia_tjmg(
 
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-            # Passo 1: carrega formulário para estabelecer sessão/cookies
             r_form = await client.get(FORM_URL, headers=HEADERS)
 
-            # Passo 2: primeira tentativa de busca
-            response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+            # Primeira requisição SEMPRE com 10 resultados: o portal só entrega resultados
+            # estáticos no caminho pós-CAPTCHA quando linhasPorPagina=10 na requisição
+            # que dispara o CAPTCHA. Com 50 o servidor entrega 828KB de formulário vazio.
+            params_10 = {**params, "linhasPorPagina": "10"}
+            response = await client.get(SEARCH_URL, params=params_10, headers=HEADERS)
 
-            # Passo 3: obtém resultados — lida com CAPTCHA e redirect para formulário
-            debug_info = [
-                f"form_status={r_form.status_code} "
-                f"cookies={list(client.cookies.keys())}"
-            ]
+            debug_info = [f"form_status={r_form.status_code} cookies={list(client.cookies.keys())}"]
+
             for tentativa in range(5):
                 html = _decode_html(response)
                 tem = _tem_resultados(html)
@@ -157,7 +156,6 @@ async def buscar_jurisprudencia_tjmg(
                 if tem:
                     break
                 if cap:
-                    # Tenta resolver o CAPTCHA até 4 vezes sem resetar sessão (OCR falha ~40% das vezes)
                     codigo = ""
                     for _ocr_try in range(4):
                         codigo = await _resolver_captcha_codigo(client)
@@ -166,16 +164,18 @@ async def buscar_jurisprudencia_tjmg(
                     dwr_diag = getattr(client, "_last_dwr", "n/a")
                     debug_info[-1] += f" ocr={repr(codigo)} dwr={dwr_diag}"
                     if codigo:
-                        # Portal não entrega >10 resultados pelo caminho pós-CAPTCHA
-                        captcha_params = {**params, "captcha_text": codigo, "linhasPorPagina": "10"}
-                        response = await client.get(SEARCH_URL, params=captcha_params, headers=HEADERS)
+                        response = await client.get(
+                            SEARCH_URL,
+                            params={**params_10, "captcha_text": codigo},
+                            headers=HEADERS,
+                        )
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
-                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                        response = await client.get(SEARCH_URL, params=params_10, headers=HEADERS)
                 else:
                     debug_info[-1] += f" html300={repr(html[:300])}"
                     await client.get(FORM_URL, headers=HEADERS)
-                    response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                    response = await client.get(SEARCH_URL, params=params_10, headers=HEADERS)
 
             html = _decode_html(response)
             if not _tem_resultados(html) and _e_pagina_captcha(html):
@@ -188,6 +188,14 @@ async def buscar_jurisprudencia_tjmg(
                     f"{diag}\n"
                     f"HTML final (400 chars): {repr(html[:400])}"
                 )
+
+            # Se o usuário pediu mais de 10, tenta busca adicional com n_resultados
+            # (sessão já verificada — sem CAPTCHA nesta segunda requisição)
+            if n_resultados > 10:
+                r2 = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                h2 = _decode_html(r2)
+                if _tem_resultados(h2):
+                    html = h2
 
             return _parse_resultados(html, palavras, escopo)
 
