@@ -166,8 +166,9 @@ async def buscar_jurisprudencia_tjmg(
                     dwr_diag = getattr(client, "_last_dwr", "n/a")
                     debug_info[-1] += f" ocr={repr(codigo)} dwr={dwr_diag}"
                     if codigo:
-                        # Submete captcha_text → portal confirma sessão e retorna resultados
-                        response = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                        # Portal não entrega >10 resultados pelo caminho pós-CAPTCHA
+                        captcha_params = {**params, "captcha_text": codigo, "linhasPorPagina": "10"}
+                        response = await client.get(SEARCH_URL, params=captcha_params, headers=HEADERS)
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
