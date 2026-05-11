@@ -157,16 +157,13 @@ async def buscar_jurisprudencia_tjmg(
                 if tem:
                     break
                 if cap:
-                    # Resolve OCR + DWR, depois submete busca via POST com captcha_text
+                    # Resolve OCR + DWR, depois submete busca via GET com captcha_text na URL
+                    # (o formulário TJMG usa method=GET — o browser envia todos os campos via query string)
                     codigo = await _resolver_captcha_codigo(client)
                     debug_info[-1] += f" ocr={repr(codigo)}"
                     if codigo:
-                        post_params = {**params, "captcha_text": codigo}
-                        response = await client.post(
-                            SEARCH_URL,
-                            data=post_params,
-                            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-                        )
+                        get_params = {**params, "captcha_text": codigo}
+                        response = await client.get(SEARCH_URL, params=get_params, headers=HEADERS)
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
