@@ -134,30 +134,47 @@ async def buscar_jurisprudencia_tjmg(
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
             # Passo 1: carrega formulário para estabelecer sessão/cookies
-            await client.get(FORM_URL, headers=HEADERS)
+            r_form = await client.get(FORM_URL, headers=HEADERS)
 
             # Passo 2: primeira tentativa de busca
             response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-            # Passo 3: obtém resultados — lida com CAPTCHA (401) e redirect para formulário (302→200)
-            for _ in range(5):
+            # Passo 3: obtém resultados — lida com CAPTCHA e redirect para formulário
+            debug_info = [
+                f"form_status={r_form.status_code} "
+                f"cookies={list(client.cookies.keys())}"
+            ]
+            for tentativa in range(5):
                 html = _decode_html(response)
-                if _tem_resultados(html):
-                    break  # resultados encontrados
-                if _e_pagina_captcha(html):
+                tem = _tem_resultados(html)
+                cap = _e_pagina_captcha(html)
+                debug_info.append(
+                    f"[t{tentativa+1}] status={response.status_code} "
+                    f"len={len(html)} resultados={tem} captcha={cap}"
+                )
+                if tem:
+                    break
+                if cap:
                     sucesso = await _resolver_captcha(client)
+                    debug_info[-1] += f" ocr_ok={sucesso}"
                     if not sucesso:
                         await client.get(FORM_URL, headers=HEADERS)
                 else:
-                    # Formulário vazio sem captcha (redirect): recarrega sessão
+                    debug_info[-1] += f" html300={repr(html[:300])}"
                     await client.get(FORM_URL, headers=HEADERS)
                 response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
             html = _decode_html(response)
             if not _tem_resultados(html) and _e_pagina_captcha(html):
-                return "Não foi possível resolver o CAPTCHA. Tente novamente em alguns segundos."
-            if not _tem_resultados(html) and "Nenhum Espelho" in html:
-                return f'Jurisprudência TJMG — "{palavras}" [{escopo}]\n{"="*60}\nNenhum resultado encontrado para os termos informados.'
+                diag = "\n".join(debug_info)
+                return f"Não foi possível resolver o CAPTCHA.\n{diag}"
+            if not _tem_resultados(html):
+                diag = "\n".join(debug_info)
+                return (
+                    f'[DIAGNÓSTICO — "{palavras}" / {escopo}]\n'
+                    f"{diag}\n"
+                    f"HTML final (400 chars): {repr(html[:400])}"
+                )
 
             return _parse_resultados(html, palavras, escopo)
 
