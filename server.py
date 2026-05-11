@@ -251,9 +251,6 @@ async def _resolver_captcha_codigo(client: httpx.AsyncClient) -> str:
     return codigo if dwr_ok else ""
 
 
-async def _resolver_captcha(client: httpx.AsyncClient) -> bool:
-    """Compatibilidade para obter_inteiro_teor_tjmg."""
-    return bool(await _resolver_captcha_codigo(client))
 
 
 def _parse_resultados(html: str, palavras: str, escopo: str) -> str:
@@ -350,12 +347,19 @@ async def obter_inteiro_teor_tjmg(
                 if "panel1" in html or _tem_resultados(html):
                     break
                 if _e_pagina_captcha(html):
-                    sucesso = await _resolver_captcha(client)
-                    if not sucesso:
+                    codigo = await _resolver_captcha_codigo(client)
+                    if codigo:
+                        response = await client.get(
+                            SEARCH_URL,
+                            params={**params, "captcha_text": codigo},
+                            headers=HEADERS,
+                        )
+                    else:
                         await client.get(FORM_URL, headers=HEADERS)
+                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
                 else:
                     await client.get(FORM_URL, headers=HEADERS)
-                response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                    response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
             html = _decode_html(response)
             if _e_pagina_captcha(html):
@@ -514,6 +518,20 @@ class _HealthASGI:
 
         if path == "/diag":
             result = await buscar_jurisprudencia_tjmg("honorarios Estado")
+            body = result.encode("utf-8", errors="replace")
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+
+        if path == "/diag-teor":
+            result = await obter_inteiro_teor_tjmg("honorarios Estado", numero_resultado=1)
             body = result.encode("utf-8", errors="replace")
             await send({
                 "type": "http.response.start",
