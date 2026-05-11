@@ -108,6 +108,7 @@ async def buscar_jurisprudencia_tjmg(
         "codigoCompostoRelator": "",
         "listaRelator":          "",
         "classe":                "",
+        "listaClasse":           CLASSE_APELACAO,
         "codigoAssunto":         "",
         "dataPublicacaoInicial": "",
         "dataPublicacaoFinal":   "",
@@ -132,7 +133,6 @@ async def buscar_jurisprudencia_tjmg(
         params["listaOrgaoJulgador"] = CAMARA_1_CIVEL
     if escopo in ("relator", "camara_e_relator"):
         params["listaRelator"] = RELATOR_MANOEL
-    params["classe"] = CLASSE_APELACAO
 
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
@@ -356,6 +356,7 @@ async def obter_inteiro_teor_tjmg(
         "codigoCompostoRelator": "",
         "listaRelator":          "",
         "classe":                "",
+        "listaClasse":           CLASSE_APELACAO,
         "codigoAssunto":         "",
         "dataPublicacaoInicial": "",
         "dataPublicacaoFinal":   "",
@@ -381,7 +382,6 @@ async def obter_inteiro_teor_tjmg(
         params["listaOrgaoJulgador"] = CAMARA_1_CIVEL
     if escopo in ("relator", "camara_e_relator"):
         params["listaRelator"] = RELATOR_MANOEL
-    params["classe"] = CLASSE_APELACAO
 
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
@@ -594,7 +594,7 @@ async def _diag_captcha_raw(palavras: str) -> str:
         "palavras": palavras, "pesquisarPor": "ementa", "orderByData": "2",
         "codigoOrgaoJulgador": "", "listaOrgaoJulgador": CAMARA_1_CIVEL,
         "codigoCompostoRelator": "", "listaRelator": RELATOR_MANOEL,
-        "classe": CLASSE_APELACAO,
+        "classe": "", "listaClasse": CLASSE_APELACAO,
         "codigoAssunto": "", "dataPublicacaoInicial": "", "dataPublicacaoFinal": "",
         "dataJulgamentoInicial": "", "dataJulgamentoFinal": "",
         "siglaLegislativa": "", "referenciaLegislativa": "", "numeroRefLegislativa": "",
