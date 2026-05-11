@@ -684,10 +684,8 @@ class _HealthASGI:
             return
 
         if path == "/diag-captcha":
-            # Testa o caminho de CAPTCHA diretamente: ignora cache, usa termo único por timestamp
-            import time
-            termo = f"honorarios {int(time.time())}"
-            result = await _diag_captcha_raw(termo)
+            # Usa termo real com resultados esperados para testar o caminho pós-CAPTCHA
+            result = await _diag_captcha_raw("prescricao quinquenal Estado")
             body = result.encode("utf-8", errors="replace")
             await send({"type": "http.response.start", "status": 200,
                         "headers": [(b"content-type", b"text/plain; charset=utf-8"),
