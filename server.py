@@ -139,19 +139,25 @@ async def buscar_jurisprudencia_tjmg(
             # Passo 2: primeira tentativa de busca
             response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-            # Passo 3: resolve CAPTCHA se necessário (até 4 tentativas)
-            for tentativa in range(4):
-                if not _e_pagina_captcha(_decode_html(response)):
-                    break
-                sucesso = await _resolver_captcha(client)
-                if not sucesso:
-                    # CAPTCHA mal lido — recarrega sessão e tenta de novo
+            # Passo 3: obtém resultados — lida com CAPTCHA (401) e redirect para formulário (302→200)
+            for _ in range(5):
+                html = _decode_html(response)
+                if _tem_resultados(html):
+                    break  # resultados encontrados
+                if _e_pagina_captcha(html):
+                    sucesso = await _resolver_captcha(client)
+                    if not sucesso:
+                        await client.get(FORM_URL, headers=HEADERS)
+                else:
+                    # Formulário vazio sem captcha (redirect): recarrega sessão
                     await client.get(FORM_URL, headers=HEADERS)
                 response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
             html = _decode_html(response)
-            if _e_pagina_captcha(html):
-                return "Não foi possível resolver o CAPTCHA após 4 tentativas. Tente novamente em alguns segundos."
+            if not _tem_resultados(html) and _e_pagina_captcha(html):
+                return "Não foi possível resolver o CAPTCHA. Tente novamente em alguns segundos."
+            if not _tem_resultados(html) and "Nenhum Espelho" in html:
+                return f'Jurisprudência TJMG — "{palavras}" [{escopo}]\n{"="*60}\nNenhum resultado encontrado para os termos informados.'
 
             return _parse_resultados(html, palavras, escopo)
 
@@ -166,8 +172,16 @@ def _decode_html(response: httpx.Response) -> str:
     return response.content.decode("iso-8859-1", errors="replace")
 
 
+def _tem_resultados(html: str) -> bool:
+    return "caixa_processo" in html or "foram encontrados" in html.lower()
+
+
 def _e_pagina_captcha(html: str) -> bool:
-    return "captcha_text" in html or "Digite os n" in html
+    return (
+        "captcha_text" in html
+        or "Digite os n" in html
+        or "Informe o c" in html  # título da página de captcha
+    )
 
 
 async def _resolver_captcha(client: httpx.AsyncClient) -> bool:
@@ -312,17 +326,21 @@ async def obter_inteiro_teor_tjmg(
             await client.get(FORM_URL, headers=HEADERS)
             response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-            for _ in range(4):
-                if not _e_pagina_captcha(_decode_html(response)):
+            for _ in range(5):
+                html = _decode_html(response)
+                if "panel1" in html or _tem_resultados(html):
                     break
-                sucesso = await _resolver_captcha(client)
-                if not sucesso:
+                if _e_pagina_captcha(html):
+                    sucesso = await _resolver_captcha(client)
+                    if not sucesso:
+                        await client.get(FORM_URL, headers=HEADERS)
+                else:
                     await client.get(FORM_URL, headers=HEADERS)
                 response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
             html = _decode_html(response)
             if _e_pagina_captcha(html):
-                return "Não foi possível resolver o CAPTCHA após 4 tentativas."
+                return "Não foi possível resolver o CAPTCHA. Tente novamente em alguns segundos."
 
             return _parse_inteiro_teor(html, palavras, numero_resultado)
 
