@@ -162,7 +162,22 @@ async def buscar_jurisprudencia_tjmg(
                     if not sucesso:
                         await client.get(FORM_URL, headers=HEADERS)
                 else:
-                    debug_info[-1] += f" html300={repr(html[:300])}"
+                    ct = response.headers.get("content-type", "?")
+                    ce = response.headers.get("content-encoding", "none")
+                    debug_info[-1] += f" ct={ct} ce={ce}"
+                    # Para páginas grandes, mostra onde termos-chave aparecem
+                    if len(html) > 50000:
+                        lhtml = html.lower()
+                        for term in ["caixa_processo", "caixa", "espelho", "ementa", "relator"]:
+                            pos = lhtml.find(term)
+                            if pos >= 0:
+                                snippet = repr(html[max(0, pos - 30):pos + 120])
+                                debug_info[-1] += f" |{term}@{pos}:{snippet}"
+                                break
+                        q = len(html) // 3
+                        debug_info[-1] += f" |1/3={repr(html[q:q+300])}"
+                    else:
+                        debug_info[-1] += f" html300={repr(html[:300])}"
                     await client.get(FORM_URL, headers=HEADERS)
                 response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
