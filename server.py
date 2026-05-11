@@ -3,6 +3,7 @@ import os
 import re
 import random
 import string
+import urllib.parse
 import httpx
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
@@ -141,7 +142,7 @@ async def buscar_jurisprudencia_tjmg(
             # estáticos no caminho pós-CAPTCHA quando linhasPorPagina=10 na requisição
             # que dispara o CAPTCHA. Com 50 o servidor entrega 828KB de formulário vazio.
             params_10 = {**params, "linhasPorPagina": "10"}
-            response = await client.get(SEARCH_URL, params=params_10, headers=HEADERS)
+            response = await _get_iso(client, SEARCH_URL, params_10, HEADERS)
 
             debug_info = [f"form_status={r_form.status_code} cookies={list(client.cookies.keys())}"]
 
@@ -164,18 +165,18 @@ async def buscar_jurisprudencia_tjmg(
                     dwr_diag = getattr(client, "_last_dwr", "n/a")
                     debug_info[-1] += f" ocr={repr(codigo)} dwr={dwr_diag}"
                     if codigo:
-                        response = await client.get(
-                            SEARCH_URL,
-                            params={**params_10, "captcha_text": codigo},
-                            headers=HEADERS,
+                        response = await _get_iso(
+                            client, SEARCH_URL,
+                            {**params_10, "captcha_text": codigo},
+                            HEADERS,
                         )
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
-                        response = await client.get(SEARCH_URL, params=params_10, headers=HEADERS)
+                        response = await _get_iso(client, SEARCH_URL, params_10, HEADERS)
                 else:
                     debug_info[-1] += f" html300={repr(html[:300])}"
                     await client.get(FORM_URL, headers=HEADERS)
-                    response = await client.get(SEARCH_URL, params=params_10, headers=HEADERS)
+                    response = await _get_iso(client, SEARCH_URL, params_10, HEADERS)
 
             html = _decode_html(response)
             if not _tem_resultados(html) and _e_pagina_captcha(html):
@@ -189,10 +190,9 @@ async def buscar_jurisprudencia_tjmg(
                     f"HTML final (400 chars): {repr(html[:400])}"
                 )
 
-            # Se o usuário pediu mais de 10, tenta busca adicional com n_resultados
-            # (sessão já verificada — sem CAPTCHA nesta segunda requisição)
+            # Sessão verificada — tenta busca com n_resultados completo
             if n_resultados > 10:
-                r2 = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                r2 = await _get_iso(client, SEARCH_URL, params, HEADERS)
                 h2 = _decode_html(r2)
                 if _tem_resultados(h2):
                     html = h2
@@ -208,6 +208,15 @@ async def buscar_jurisprudencia_tjmg(
 def _decode_html(response: httpx.Response) -> str:
     """Portal TJMG é ISO-8859-1 mas não declara charset no header HTTP."""
     return response.content.decode("iso-8859-1", errors="replace")
+
+
+def _get_iso(client: httpx.AsyncClient, url: str, params: dict, headers: dict):
+    """GET com query string codificada em ISO-8859-1 (TJMG não aceita UTF-8 nos params)."""
+    qs = urllib.parse.urlencode(
+        {k: v.encode("iso-8859-1", errors="replace") if isinstance(v, str) else v
+         for k, v in params.items()}
+    )
+    return client.get(f"{url}?{qs}", headers=headers)
 
 
 def _tem_resultados(html: str) -> bool:
@@ -355,7 +364,7 @@ async def obter_inteiro_teor_tjmg(
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
             await client.get(FORM_URL, headers=HEADERS)
-            response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+            response = await _get_iso(client, SEARCH_URL, params, HEADERS)
 
             for _ in range(5):
                 html = _decode_html(response)
@@ -368,13 +377,17 @@ async def obter_inteiro_teor_tjmg(
                         if codigo:
                             break
                     if codigo:
-                        response = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                        response = await _get_iso(
+                            client, SEARCH_URL,
+                            {**params, "captcha_text": codigo},
+                            HEADERS,
+                        )
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
-                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                        response = await _get_iso(client, SEARCH_URL, params, HEADERS)
                 else:
                     await client.get(FORM_URL, headers=HEADERS)
-                    response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                    response = await _get_iso(client, SEARCH_URL, params, HEADERS)
 
             html = _decode_html(response)
             if _e_pagina_captcha(html):
@@ -697,8 +710,8 @@ class _HealthASGI:
             return
 
         if path == "/diag-captcha":
-            # Usa termo real com resultados esperados para testar o caminho pós-CAPTCHA
-            result = await _diag_captcha_raw("prescricao quinquenal Estado")
+            # Testa com termo acentuado — replica o que o Claude.ai envia via MCP
+            result = await _diag_captcha_raw("prescrição responsabilidade Estado")
             body = result.encode("utf-8", errors="replace")
             await send({"type": "http.response.start", "status": 200,
                         "headers": [(b"content-type", b"text/plain; charset=utf-8"),
