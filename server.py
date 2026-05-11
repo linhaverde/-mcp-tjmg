@@ -471,6 +471,59 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
     return decisoes
 
 
+async def _diag_extrair_js() -> str:
+    """Obtém a página 828KB pós-CAPTCHA e extrai trechos de JS relevantes."""
+    import time
+    params = {
+        "numeroRegistro": "1", "totalLinhas": "1",
+        "palavras": f"honorarios {int(time.time())}", "pesquisarPor": "ementa",
+        "orderByData": "2", "listaOrgaoJulgador": CAMARA_1_CIVEL,
+        "listaRelator": RELATOR_MANOEL, "classe": CLASSE_APELACAO,
+        "linhasPorPagina": "10", "pesquisaPalavras": "Pesquisar",
+    }
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        await client.get(FORM_URL, headers=HEADERS)
+        r = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+        if _e_pagina_captcha(_decode_html(r)):
+            codigo = await _resolver_captcha_codigo(client)
+            if codigo:
+                await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                r = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+
+        html = _decode_html(r)
+        soup = BeautifulSoup(html, "html.parser")
+
+        log = [f"len={len(html)} status={r.status_code}"]
+
+        # Extrai todos os blocos <script> inline
+        scripts = soup.find_all("script")
+        log.append(f"\n=== {len(scripts)} blocos <script> ===")
+        for i, s in enumerate(scripts[:20]):
+            src = s.get("src", "")
+            content = (s.string or "").strip()
+            if src:
+                log.append(f"[{i}] src={src}")
+            elif content:
+                # Procura por URLs .do, $.ajax, XMLHttpRequest, pesquisa, resultado
+                if any(k in content for k in [".do", "ajax", "XMLHttp", "pesquisa", "result", "captcha", "window.location"]):
+                    log.append(f"[{i}] inline ({len(content)} chars):\n{content[:800]}")
+
+        # Procura padrões específicos no HTML completo
+        log.append("\n=== Ocorrências de URLs .do no HTML ===")
+        for m in re.finditer(r'["\']([^"\']*\.do[^"\']*)["\']', html):
+            url = m.group(1)
+            if url not in [FORM_URL, SEARCH_URL] and "dwr" not in url:
+                log.append(f"  {url}")
+
+        # Procura pelo conteúdo após "Nenhum Espelho"
+        pos = html.find("Nenhum Espelho")
+        if pos >= 0:
+            log.append(f"\n=== Contexto em torno de 'Nenhum Espelho' (@{pos}) ===")
+            log.append(repr(html[max(0, pos-200):pos+500]))
+
+        return "\n".join(log)
+
+
 async def _diag_captcha_raw(palavras: str) -> str:
     """Executa a busca com diagnóstico completo de cada etapa, incluindo DWR."""
     params = {
@@ -603,6 +656,16 @@ class _HealthASGI:
 
         if path == "/diag-teor":
             result = await obter_inteiro_teor_tjmg("honorarios Estado", numero_resultado=1)
+            body = result.encode("utf-8", errors="replace")
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                    (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
+
+        if path == "/diag-js":
+            # Baixa a página 828KB pós-CAPTCHA e extrai os scripts JS para encontrar chamadas AJAX
+            result = await _diag_extrair_js()
             body = result.encode("utf-8", errors="replace")
             await send({"type": "http.response.start", "status": 200,
                         "headers": [(b"content-type", b"text/plain; charset=utf-8"),
