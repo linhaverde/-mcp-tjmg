@@ -190,7 +190,8 @@ def _decode_html(response: httpx.Response) -> str:
 
 
 def _tem_resultados(html: str) -> bool:
-    return "caixa_processo" in html or "foram encontrados" in html.lower()
+    # Verifica tag HTML real, não apenas referência CSS (.caixa_processo {})
+    return 'class="caixa_processo"' in html or "foram encontrados" in html.lower()
 
 
 def _e_pagina_captcha(html: str) -> bool:
