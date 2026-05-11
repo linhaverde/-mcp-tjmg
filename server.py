@@ -512,6 +512,20 @@ class _HealthASGI:
             await send({"type": "http.response.body", "body": self._health_body})
             return
 
+        if path == "/diag":
+            result = await buscar_jurisprudencia_tjmg("honorarios Estado")
+            body = result.encode("utf-8", errors="replace")
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+
         # Patcha o Host para localhost antes de chegar na validação do FastMCP
         headers = [
             (b"host", b"localhost") if name.lower() == b"host" else (name, value)
