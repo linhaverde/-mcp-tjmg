@@ -6,6 +6,7 @@ import string
 import httpx
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 try:
     import ddddocr
@@ -14,7 +15,27 @@ try:
 except Exception:
     OCR_DISPONIVEL = False
 
-mcp = FastMCP("TJMG Jurisprudência")
+_RENDER_HOST = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "mcp-tjmg.onrender.com")
+
+mcp = FastMCP(
+    "TJMG Jurisprudência",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            "localhost",
+            "localhost:*",
+            "127.0.0.1",
+            "127.0.0.1:*",
+            _RENDER_HOST,
+            f"{_RENDER_HOST}:443",
+        ],
+        allowed_origins=[
+            "https://claude.ai",
+            "https://www.claude.ai",
+            f"https://{_RENDER_HOST}",
+        ],
+    ),
+)
 
 BASE          = "https://www5.tjmg.jus.br/jurisprudencia"
 FORM_URL      = f"{BASE}/formEspelhoAcordao.do"
