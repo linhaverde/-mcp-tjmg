@@ -47,6 +47,8 @@ CAMARA_1_CIVEL    = "1-1"
 RELATOR_MANOEL    = "0-19836"
 CLASSE_APELACAO   = "8"   # Apelação Cível
 
+_RE_CAIXA = re.compile(r'class=["\'][^"\']*caixa_processo')
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -190,8 +192,8 @@ def _decode_html(response: httpx.Response) -> str:
 
 
 def _tem_resultados(html: str) -> bool:
-    # Verifica tag HTML real, não apenas referência CSS (.caixa_processo {})
-    return 'class="caixa_processo"' in html or "foram encontrados" in html.lower()
+    # Regex aceita aspas simples/duplas e múltiplas classes; descarta CSS (.caixa_processo {)
+    return bool(_RE_CAIXA.search(html)) or "foram encontrados" in html.lower()
 
 
 def _e_pagina_captcha(html: str) -> bool:
