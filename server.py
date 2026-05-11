@@ -211,11 +211,25 @@ def _decode_html(response: httpx.Response) -> str:
 
 
 def _get_iso(client: httpx.AsyncClient, url: str, params: dict, headers: dict):
-    """GET com query string codificada em ISO-8859-1 (TJMG não aceita UTF-8 nos params)."""
-    qs = urllib.parse.urlencode(
-        {k: v.encode("iso-8859-1", errors="replace") if isinstance(v, str) else v
-         for k, v in params.items()}
-    )
+    """GET com query string codificada em ISO-8859-1 (x-www-form-urlencoded).
+
+    httpx/urllib codificam parâmetros como UTF-8 por padrão (%C3%A7 para ç).
+    TJMG espera ISO-8859-1 (%E7 para ç). Além disso, urlencode com bytes produz
+    %2B para espaços — TJMG decodifica %2B como '+' literal e não encontra resultados.
+    A forma correta é: acentos como %XX ISO-8859-1, espaços como '+' literal.
+    """
+    parts = []
+    for k, v in params.items():
+        if isinstance(v, str):
+            # Codifica como ISO-8859-1 → percent-encode todos os bytes não-ASCII/não-seguros
+            # → substitui %20 por '+' (espaço em x-www-form-urlencoded)
+            v_enc = urllib.parse.quote_from_bytes(
+                v.encode("iso-8859-1", errors="replace"), safe=""
+            ).replace("%20", "+")
+        else:
+            v_enc = urllib.parse.quote_plus(str(v))
+        parts.append(f"{k}={v_enc}")
+    qs = "&".join(parts)
     return client.get(f"{url}?{qs}", headers=headers)
 
 
