@@ -157,20 +157,23 @@ async def buscar_jurisprudencia_tjmg(
                 if tem:
                     break
                 if cap:
-                    sucesso = await _resolver_captcha(client)
-                    debug_info[-1] += f" ocr_ok={sucesso}"
-                    if not sucesso:
-                        await client.get(FORM_URL, headers=HEADERS)
-                else:
-                    # Página grande sem CAPTCHA: é o estado pós-CAPTCHA "formulário pré-preenchido"
-                    # — a sessão já está verificada, basta repetir a busca SEM resetar a sessão.
-                    # Página pequena: formulário vazio / erro real — aí sim recarrega a sessão.
-                    if len(html) > 50000:
-                        debug_info[-1] += " (post-captcha-form: retry-same-session)"
+                    # Resolve OCR + DWR, depois submete busca via POST com captcha_text
+                    codigo = await _resolver_captcha_codigo(client)
+                    debug_info[-1] += f" ocr={repr(codigo)}"
+                    if codigo:
+                        post_params = {**params, "captcha_text": codigo}
+                        response = await client.post(
+                            SEARCH_URL,
+                            data=post_params,
+                            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+                        )
                     else:
-                        debug_info[-1] += f" html300={repr(html[:300])}"
                         await client.get(FORM_URL, headers=HEADERS)
-                response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                else:
+                    debug_info[-1] += f" html300={repr(html[:300])}"
+                    await client.get(FORM_URL, headers=HEADERS)
+                    response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
             html = _decode_html(response)
             if not _tem_resultados(html) and _e_pagina_captcha(html):
@@ -210,29 +213,22 @@ def _e_pagina_captcha(html: str) -> bool:
     )
 
 
-async def _resolver_captcha(client: httpx.AsyncClient) -> bool:
-    """Baixa a imagem do CAPTCHA, resolve via OCR e valida via DWR."""
+async def _resolver_captcha_codigo(client: httpx.AsyncClient) -> str:
+    """Baixa a imagem do CAPTCHA, resolve via OCR, valida via DWR.
+    Retorna o código de 5 dígitos se válido, string vazia se falhou."""
 
-    # Baixa imagem (cache-buster para garantir imagem fresca)
     img_url = f"{CAPTCHA_IMG}?{random.random()}"
-    img_resp = await client.get(
-        img_url,
-        headers={**HEADERS, "Referer": SEARCH_URL},
-    )
+    img_resp = await client.get(img_url, headers={**HEADERS, "Referer": SEARCH_URL})
     if img_resp.status_code != 200:
-        return False
+        return ""
 
-    # OCR — extrai só os dígitos
     codigo_bruto = _ocr.classification(img_resp.content)
     codigo = re.sub(r"\D", "", codigo_bruto)[:5]
-
     if len(codigo) != 5:
-        return False
+        return ""
 
-    # Valida via DWR (Direct Web Remoting)
-    jsessionid  = client.cookies.get("JSESSIONID", "")
-    script_id   = "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
-
+    jsessionid = client.cookies.get("JSESSIONID", "")
+    script_id  = "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
     dwr_body = (
         f"callCount=1\n"
         f"page=/jurisprudencia/pesquisaPalavrasEspelhoAcordao.do\n"
@@ -244,23 +240,23 @@ async def _resolver_captcha(client: httpx.AsyncClient) -> bool:
         f"c0-param0=string:{codigo}\n"
         f"batchId=0\n"
     )
-
     dwr_resp = await client.post(
         CAPTCHA_DWR,
         content=dwr_body.encode("utf-8"),
-        headers={
-            **HEADERS,
-            "Content-Type": "text/plain",
-            "Referer":      f"{BASE}/pesquisaPalavrasEspelhoAcordao.do",
-        },
+        headers={**HEADERS, "Content-Type": "text/plain",
+                 "Referer": f"{BASE}/pesquisaPalavrasEspelhoAcordao.do"},
     )
-
-    # Resposta DWR: ...dwr.engine._remoteHandleCallback('0','0',true);
-    return (
+    dwr_ok = (
         dwr_resp.status_code == 200
         and "remoteHandleCallback" in dwr_resp.text
         and dwr_resp.text.strip().endswith("true);")
     )
+    return codigo if dwr_ok else ""
+
+
+async def _resolver_captcha(client: httpx.AsyncClient) -> bool:
+    """Compatibilidade para obter_inteiro_teor_tjmg."""
+    return bool(await _resolver_captcha_codigo(client))
 
 
 def _parse_resultados(html: str, palavras: str, escopo: str) -> str:
