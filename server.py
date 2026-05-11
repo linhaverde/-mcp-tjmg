@@ -157,13 +157,13 @@ async def buscar_jurisprudencia_tjmg(
                 if tem:
                     break
                 if cap:
-                    # Resolve OCR + DWR, depois submete busca via GET com captcha_text na URL
-                    # (o formulário TJMG usa method=GET — o browser envia todos os campos via query string)
                     codigo = await _resolver_captcha_codigo(client)
                     debug_info[-1] += f" ocr={repr(codigo)}"
                     if codigo:
-                        get_params = {**params, "captcha_text": codigo}
-                        response = await client.get(SEARCH_URL, params=get_params, headers=HEADERS)
+                        # Passo 1: submete captcha_text → portal devolve página de "sessão verificada"
+                        await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                        # Passo 2: GET normal com os params de busca → agora deve retornar resultados
+                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
@@ -349,11 +349,8 @@ async def obter_inteiro_teor_tjmg(
                 if _e_pagina_captcha(html):
                     codigo = await _resolver_captcha_codigo(client)
                     if codigo:
-                        response = await client.get(
-                            SEARCH_URL,
-                            params={**params, "captcha_text": codigo},
-                            headers=HEADERS,
-                        )
+                        await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
