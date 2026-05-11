@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import random
@@ -249,6 +250,22 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
     return decisoes[:30]  # máximo 30 decisões por busca
 
 
+async def _keep_alive():
+    """Pings /health a cada 10 min para evitar o spin-down do Render free tier."""
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not base_url:
+        return
+    ping_url = f"{base_url}/health"
+    await asyncio.sleep(60)  # aguarda 1 min antes do primeiro ping
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            try:
+                await client.get(ping_url)
+            except Exception:
+                pass
+            await asyncio.sleep(600)  # 10 minutos
+
+
 if __name__ == "__main__":
     import uvicorn
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -256,15 +273,20 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 10000))
 
-    # Middleware intercepta health check sem interferir nas rotas do MCP
     class HealthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
             if request.url.path in ("/", "/health"):
                 return JSONResponse({"status": "ok", "server": "TJMG Jurisprudência MCP"})
             return await call_next(request)
 
-    # mcp_app serve em /mcp internamente — middleware não interfere
     mcp_app = mcp.streamable_http_app()
     app = HealthMiddleware(mcp_app)
 
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    async def _run():
+        config = uvicorn.Config(app, host="0.0.0.0", port=port)
+        server = uvicorn.Server(config)
+        keep_alive_task = asyncio.create_task(_keep_alive())
+        await server.serve()
+        keep_alive_task.cancel()
+
+    asyncio.run(_run())
