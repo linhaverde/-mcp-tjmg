@@ -158,10 +158,13 @@ async def buscar_jurisprudencia_tjmg(
                     break
                 if cap:
                     codigo = await _resolver_captcha_codigo(client)
-                    debug_info[-1] += f" ocr={repr(codigo)}"
+                    dwr_diag = getattr(client, "_last_dwr", "n/a")
+                    debug_info[-1] += f" ocr={repr(codigo)} dwr={dwr_diag}"
                     if codigo:
                         # Passo 1: submete captcha_text → portal devolve página de "sessão verificada"
-                        await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                        r_cap = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+                        cap_html = _decode_html(r_cap)
+                        debug_info[-1] += f" cap_st={r_cap.status_code} cap_len={len(cap_html)} cap300={repr(cap_html[:300])}"
                         # Passo 2: GET normal com os params de busca → agora deve retornar resultados
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
                     else:
@@ -248,6 +251,8 @@ async def _resolver_captcha_codigo(client: httpx.AsyncClient) -> str:
         and "remoteHandleCallback" in dwr_resp.text
         and dwr_resp.text.strip().endswith("true);")
     )
+    # Expõe a resposta DWR completa para diagnóstico (injetada como atributo no cliente)
+    client._last_dwr = f"status={dwr_resp.status_code} body={repr(dwr_resp.text.strip()[-120:])}"
     return codigo if dwr_ok else ""
 
 
