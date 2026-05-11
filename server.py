@@ -471,6 +471,80 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
     return decisoes
 
 
+async def _diag_captcha_raw(palavras: str) -> str:
+    """Executa a busca com diagnóstico completo de cada etapa, incluindo DWR."""
+    params = {
+        "numeroRegistro": "1", "totalLinhas": "1",
+        "palavras": palavras, "pesquisarPor": "ementa", "orderByData": "2",
+        "codigoOrgaoJulgador": "", "listaOrgaoJulgador": CAMARA_1_CIVEL,
+        "codigoCompostoRelator": "", "listaRelator": RELATOR_MANOEL,
+        "classe": CLASSE_APELACAO,
+        "codigoAssunto": "", "dataPublicacaoInicial": "", "dataPublicacaoFinal": "",
+        "dataJulgamentoInicial": "", "dataJulgamentoFinal": "",
+        "siglaLegislativa": "", "referenciaLegislativa": "", "numeroRefLegislativa": "",
+        "anoRefLegislativa": "", "legislacao": "", "norma": "", "descNorma": "",
+        "complemento_1": "", "listaPesquisa": "", "descricaoTextosLegais": "",
+        "observacoes": "", "linhasPorPagina": "10", "pesquisaPalavras": "Pesquisar",
+    }
+    log = [f"DIAGNÓSTICO CAPTCHA — termos={repr(palavras)}"]
+    async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+        r0 = await client.get(FORM_URL, headers=HEADERS)
+        log.append(f"form: status={r0.status_code} cookies={list(client.cookies.keys())}")
+
+        r1 = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+        h1 = _decode_html(r1)
+        log.append(f"busca1: status={r1.status_code} len={len(h1)} cap={_e_pagina_captcha(h1)} res={_tem_resultados(h1)}")
+
+        if _tem_resultados(h1):
+            log.append("SUCESSO sem CAPTCHA")
+            log.append(_parse_resultados(h1, palavras, "camara_e_relator")[:500])
+            return "\n".join(log)
+
+        if not _e_pagina_captcha(h1):
+            log.append(f"FALHA: sem captcha e sem resultados. html300={repr(h1[:300])}")
+            return "\n".join(log)
+
+        # --- caminho CAPTCHA ---
+        img_resp = await client.get(f"{CAPTCHA_IMG}?{random.random()}", headers={**HEADERS, "Referer": SEARCH_URL})
+        log.append(f"captcha_img: status={img_resp.status_code} len={len(img_resp.content)}")
+
+        codigo_bruto = _ocr.classification(img_resp.content) if OCR_DISPONIVEL else ""
+        codigo = re.sub(r"\D", "", codigo_bruto)[:5]
+        log.append(f"ocr: bruto={repr(codigo_bruto)} limpo={repr(codigo)}")
+
+        jsessionid = client.cookies.get("JSESSIONID", "")
+        script_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
+        dwr_body = (
+            f"callCount=1\npage=/jurisprudencia/pesquisaPalavrasEspelhoAcordao.do\n"
+            f"httpSessionId={jsessionid}\nscriptSessionId={script_id}\n"
+            f"c0-scriptName=ValidacaoCaptchaAction\nc0-methodName=isCaptchaValid\n"
+            f"c0-id=0\nc0-param0=string:{codigo}\nbatchId=0\n"
+        )
+        dwr_r = await client.post(CAPTCHA_DWR, content=dwr_body.encode(),
+                                  headers={**HEADERS, "Content-Type": "text/plain",
+                                           "Referer": f"{BASE}/pesquisaPalavrasEspelhoAcordao.do"})
+        log.append(f"dwr: status={dwr_r.status_code} body={repr(dwr_r.text.strip())}")
+
+        if len(codigo) == 5:
+            r_cap = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+            h_cap = _decode_html(r_cap)
+            log.append(f"captcha_get: status={r_cap.status_code} len={len(h_cap)} cap={_e_pagina_captcha(h_cap)} res={_tem_resultados(h_cap)}")
+            log.append(f"captcha_get html300={repr(h_cap[:300])}")
+
+            r2 = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+            h2 = _decode_html(r2)
+            log.append(f"busca2: status={r2.status_code} len={len(h2)} cap={_e_pagina_captcha(h2)} res={_tem_resultados(h2)}")
+            log.append(f"busca2 html300={repr(h2[:300])}")
+
+            if _tem_resultados(h2):
+                log.append("SUCESSO com CAPTCHA")
+                log.append(_parse_resultados(h2, palavras, "camara_e_relator")[:500])
+        else:
+            log.append("OCR FALHOU — código inválido")
+
+    return "\n".join(log)
+
+
 async def _keep_alive():
     """Pings /health a cada 10 min para evitar o spin-down do Render free tier."""
     base_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
@@ -521,28 +595,30 @@ class _HealthASGI:
         if path == "/diag":
             result = await buscar_jurisprudencia_tjmg("honorarios Estado")
             body = result.encode("utf-8", errors="replace")
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [
-                    (b"content-type", b"text/plain; charset=utf-8"),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            })
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                    (b"content-length", str(len(body)).encode())]})
             await send({"type": "http.response.body", "body": body})
             return
 
         if path == "/diag-teor":
             result = await obter_inteiro_teor_tjmg("honorarios Estado", numero_resultado=1)
             body = result.encode("utf-8", errors="replace")
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [
-                    (b"content-type", b"text/plain; charset=utf-8"),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            })
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                    (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
+
+        if path == "/diag-captcha":
+            # Testa o caminho de CAPTCHA diretamente: ignora cache, usa termo único por timestamp
+            import time
+            termo = f"honorarios {int(time.time())}"
+            result = await _diag_captcha_raw(termo)
+            body = result.encode("utf-8", errors="replace")
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                    (b"content-length", str(len(body)).encode())]})
             await send({"type": "http.response.body", "body": body})
             return
 
