@@ -147,6 +147,14 @@ async def buscar_jurisprudencia_tjmg(
             debug_info = [f"form_status={r_form.status_code} cookies={list(client.cookies.keys())}"]
 
             for tentativa in range(5):
+                if response.status_code == 500:
+                    return (
+                        f"O portal do TJMG retornou erro 500 para o escopo '{escopo}'. "
+                        f"O servidor do TJMG rejeita consultas com apenas um filtro isolado "
+                        f"(só câmara ou só relator). Use o escopo 'camara_e_relator' (padrão) "
+                        f"ou 'tjmg' (sem filtros). Escopos 'relator' e 'camara' estão "
+                        f"indisponíveis no momento por limitação do portal."
+                    )
                 html = _decode_html(response)
                 tem = _tem_resultados(html)
                 cap = _e_pagina_captcha(html)
@@ -381,6 +389,12 @@ async def obter_inteiro_teor_tjmg(
             response = await _get_iso(client, SEARCH_URL, params, HEADERS)
 
             for _ in range(5):
+                if response.status_code == 500:
+                    return (
+                        f"O portal do TJMG retornou erro 500 para o escopo '{escopo}'. "
+                        f"Use o escopo 'camara_e_relator' (padrão) ou 'tjmg'. "
+                        f"Escopos 'relator' e 'camara' isolados estão indisponíveis no portal."
+                    )
                 html = _decode_html(response)
                 if "panel1" in html or _tem_resultados(html):
                     break
