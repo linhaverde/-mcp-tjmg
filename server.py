@@ -521,6 +521,16 @@ async def _diag_extrair_js() -> str:
             log.append(f"\n=== Contexto em torno de 'Nenhum Espelho' (@{pos}) ===")
             log.append(repr(html[max(0, pos-200):pos+500]))
 
+        # Mostra os últimos 3KB da página (onde resultados costumam aparecer)
+        log.append(f"\n=== Últimos 3KB da página ===")
+        log.append(repr(html[-3000:]))
+
+        # Posições específicas
+        for pct in [0.5, 0.7, 0.85]:
+            pos = int(len(html) * pct)
+            log.append(f"\n=== @{pct*100:.0f}% ({pos}) ===")
+            log.append(repr(html[pos:pos+500]))
+
         return "\n".join(log)
 
 
