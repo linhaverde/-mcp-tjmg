@@ -580,7 +580,7 @@ async def _diag_captcha_raw(palavras: str) -> str:
         r0 = await client.get(FORM_URL, headers=HEADERS)
         log.append(f"form: status={r0.status_code} cookies={list(client.cookies.keys())}")
 
-        r1 = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+        r1 = await _get_iso(client, SEARCH_URL, params, HEADERS)
         h1 = _decode_html(r1)
         log.append(f"busca1: status={r1.status_code} len={len(h1)} cap={_e_pagina_captcha(h1)} res={_tem_resultados(h1)}")
 
@@ -615,12 +615,12 @@ async def _diag_captcha_raw(palavras: str) -> str:
         log.append(f"dwr: status={dwr_r.status_code} body={repr(dwr_r.text.strip())}")
 
         if len(codigo) == 5:
-            r_cap = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
+            r_cap = await _get_iso(client, SEARCH_URL, {**params, "captcha_text": codigo}, HEADERS)
             h_cap = _decode_html(r_cap)
             log.append(f"captcha_get: status={r_cap.status_code} len={len(h_cap)} cap={_e_pagina_captcha(h_cap)} res={_tem_resultados(h_cap)}")
             log.append(f"captcha_get html300={repr(h_cap[:300])}")
 
-            r2 = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+            r2 = await _get_iso(client, SEARCH_URL, params, HEADERS)
             h2 = _decode_html(r2)
             log.append(f"busca2: status={r2.status_code} len={len(h2)} cap={_e_pagina_captcha(h2)} res={_tem_resultados(h2)}")
             log.append(f"busca2 html300={repr(h2[:300])}")
