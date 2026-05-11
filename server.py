@@ -266,21 +266,35 @@ async def _keep_alive():
             await asyncio.sleep(600)  # 10 minutos
 
 
+class _HealthASGI:
+    """Middleware ASGI puro — responde /health sem bufferizar o streaming do MCP."""
+
+    def __init__(self, app):
+        self.app = app
+        self._health_body = b'{"status":"ok","server":"TJMG Jurisprud\\u00eancia MCP"}'
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") in ("/", "/health"):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(self._health_body)).encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": self._health_body})
+        else:
+            await self.app(scope, receive, send)
+
+
 if __name__ == "__main__":
     import uvicorn
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import JSONResponse
 
     port = int(os.environ.get("PORT", 10000))
 
-    class HealthMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request, call_next):
-            if request.url.path in ("/", "/health"):
-                return JSONResponse({"status": "ok", "server": "TJMG Jurisprudência MCP"})
-            return await call_next(request)
-
     mcp_app = mcp.streamable_http_app()
-    app = HealthMiddleware(mcp_app)
+    app = _HealthASGI(mcp_app)
 
     async def _run():
         config = uvicorn.Config(app, host="0.0.0.0", port=port)
