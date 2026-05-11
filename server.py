@@ -157,16 +157,17 @@ async def buscar_jurisprudencia_tjmg(
                 if tem:
                     break
                 if cap:
-                    codigo = await _resolver_captcha_codigo(client)
+                    # Tenta resolver o CAPTCHA até 4 vezes sem resetar sessão (OCR falha ~40% das vezes)
+                    codigo = ""
+                    for _ocr_try in range(4):
+                        codigo = await _resolver_captcha_codigo(client)
+                        if codigo:
+                            break
                     dwr_diag = getattr(client, "_last_dwr", "n/a")
                     debug_info[-1] += f" ocr={repr(codigo)} dwr={dwr_diag}"
                     if codigo:
-                        # Passo 1: submete captcha_text → portal devolve página de "sessão verificada"
-                        r_cap = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
-                        cap_html = _decode_html(r_cap)
-                        debug_info[-1] += f" cap_st={r_cap.status_code} cap_len={len(cap_html)} cap300={repr(cap_html[:300])}"
-                        # Passo 2: GET normal com os params de busca → agora deve retornar resultados
-                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                        # Submete captcha_text → portal confirma sessão e retorna resultados
+                        response = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
@@ -352,10 +353,13 @@ async def obter_inteiro_teor_tjmg(
                 if "panel1" in html or _tem_resultados(html):
                     break
                 if _e_pagina_captcha(html):
-                    codigo = await _resolver_captcha_codigo(client)
+                    codigo = ""
+                    for _ocr_try in range(4):
+                        codigo = await _resolver_captcha_codigo(client)
+                        if codigo:
+                            break
                     if codigo:
-                        await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
-                        response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+                        response = await client.get(SEARCH_URL, params={**params, "captcha_text": codigo}, headers=HEADERS)
                     else:
                         await client.get(FORM_URL, headers=HEADERS)
                         response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
