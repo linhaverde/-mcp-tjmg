@@ -150,10 +150,7 @@ async def buscar_jurisprudencia_tjmg(
                 if response.status_code == 500:
                     return (
                         f"O portal do TJMG retornou erro 500 para o escopo '{escopo}'. "
-                        f"O servidor do TJMG rejeita consultas com apenas um filtro isolado "
-                        f"(só câmara ou só relator). Use o escopo 'camara_e_relator' (padrão) "
-                        f"ou 'tjmg' (sem filtros). Escopos 'relator' e 'camara' estão "
-                        f"indisponíveis no momento por limitação do portal."
+                        f"Tente novamente ou use o escopo 'camara_e_relator' (padrão)."
                     )
                 html = _decode_html(response)
                 tem = _tem_resultados(html)
@@ -228,9 +225,12 @@ def _get_iso(client: httpx.AsyncClient, url: str, params: dict, headers: dict):
     """
     parts = []
     for k, v in params.items():
+        # Omite parâmetros com string vazia — TJMG retorna 500 quando recebe
+        # campos de filtro (listaOrgaoJulgador, listaRelator, classe) como "" em vez
+        # de ausentes. O browser não envia campos vazios; nós também não devemos.
+        if isinstance(v, str) and v == "":
+            continue
         if isinstance(v, str):
-            # Codifica como ISO-8859-1 → percent-encode todos os bytes não-ASCII/não-seguros
-            # → substitui %20 por '+' (espaço em x-www-form-urlencoded)
             v_enc = urllib.parse.quote_from_bytes(
                 v.encode("iso-8859-1", errors="replace"), safe=""
             ).replace("%20", "+")
@@ -392,8 +392,7 @@ async def obter_inteiro_teor_tjmg(
                 if response.status_code == 500:
                     return (
                         f"O portal do TJMG retornou erro 500 para o escopo '{escopo}'. "
-                        f"Use o escopo 'camara_e_relator' (padrão) ou 'tjmg'. "
-                        f"Escopos 'relator' e 'camara' isolados estão indisponíveis no portal."
+                        f"Tente novamente ou use o escopo 'camara_e_relator' (padrão)."
                     )
                 html = _decode_html(response)
                 if "panel1" in html or _tem_resultados(html):
