@@ -141,7 +141,7 @@ async def buscar_jurisprudencia_tjmg(
 
             # Passo 3: resolve CAPTCHA se necessário (até 4 tentativas)
             for tentativa in range(4):
-                if not _e_pagina_captcha(response.text):
+                if not _e_pagina_captcha(_decode_html(response)):
                     break
                 sucesso = await _resolver_captcha(client)
                 if not sucesso:
@@ -149,15 +149,21 @@ async def buscar_jurisprudencia_tjmg(
                     await client.get(FORM_URL, headers=HEADERS)
                 response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-            if _e_pagina_captcha(response.text):
+            html = _decode_html(response)
+            if _e_pagina_captcha(html):
                 return "Não foi possível resolver o CAPTCHA após 4 tentativas. Tente novamente em alguns segundos."
 
-            return _parse_resultados(response.text, palavras, escopo)
+            return _parse_resultados(html, palavras, escopo)
 
     except httpx.TimeoutException:
         return "Tempo limite excedido ao consultar o TJMG. O portal pode estar lento."
     except Exception as e:
         return f"Erro inesperado ao consultar o TJMG: {e}"
+
+
+def _decode_html(response: httpx.Response) -> str:
+    """Portal TJMG é ISO-8859-1 mas não declara charset no header HTTP."""
+    return response.content.decode("iso-8859-1", errors="replace")
 
 
 def _e_pagina_captcha(html: str) -> bool:
@@ -307,17 +313,18 @@ async def obter_inteiro_teor_tjmg(
             response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
             for _ in range(4):
-                if not _e_pagina_captcha(response.text):
+                if not _e_pagina_captcha(_decode_html(response)):
                     break
                 sucesso = await _resolver_captcha(client)
                 if not sucesso:
                     await client.get(FORM_URL, headers=HEADERS)
                 response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
 
-            if _e_pagina_captcha(response.text):
+            html = _decode_html(response)
+            if _e_pagina_captcha(html):
                 return "Não foi possível resolver o CAPTCHA após 4 tentativas."
 
-            return _parse_inteiro_teor(response.text, palavras, numero_resultado)
+            return _parse_inteiro_teor(html, palavras, numero_resultado)
 
     except httpx.TimeoutException:
         return "Tempo limite excedido ao consultar o TJMG."
@@ -364,47 +371,61 @@ def _parse_inteiro_teor(html: str, palavras: str, numero: int) -> str:
 
 def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
     decisoes: list[str] = []
-    bloco: list[str] = []
 
-    padrao_processo = re.compile(r"\d+\.\d{4}\.\d{2,3}\.\d{6}-\d/\d{3}")
+    caixas = soup.find_all("div", class_="caixa_processo")
+    for i, caixa in enumerate(caixas[:100]):
+        num = i + 1
 
-    for cel in soup.find_all("td"):
-        texto = cel.get_text(separator=" ", strip=True)
-        if not texto or len(texto) < 10:
-            continue
+        # número do processo: div float:left dentro do link
+        num_div = caixa.find("div", style=lambda s: s and "float: left" in s)
+        numero = num_div.get_text(strip=True) if num_div else ""
 
-        if padrao_processo.search(texto):
-            if bloco:
-                decisoes.append("\n".join(bloco))
-            num = len(decisoes) + 1
-            bloco = [f"**[{num}] Processo:** {texto}"]
+        # tipo (Apelação Cível, Agravo etc.): texto do link antes do número
+        link = caixa.find("a")
+        tipo = ""
+        if link:
+            link_text = link.get_text(separator=" ", strip=True)
+            m = re.search(r"Processo:\s+([\w\s\-/]+?)(?:\s+[\d.]+|$)", link_text)
+            if m:
+                tipo = m.group(1).strip()
 
-        elif bloco and any(k in texto.upper() for k in ("RELATOR", "RELATORA")):
-            bloco.append(f"**{texto}**")
+        partes = [f"**[{num}] {numero}**" + (f" — {tipo}" if tipo else "")]
 
-        elif bloco and len(texto) > 40:
-            bloco.append(texto)
+        # percorre irmãos após a caixa: tabela (relator), divs (data, ementa)
+        cur = caixa.find_next_sibling()
+        passos = 0
+        while cur is not None and passos < 10:
+            if hasattr(cur, "get") and cur.get("class") and "caixa_processo" in cur.get("class", []):
+                break  # início do próximo resultado
 
-    if bloco:
-        decisoes.append("\n".join(bloco))
+            if hasattr(cur, "name"):
+                if cur.name == "table":
+                    td = cur.find("td")
+                    if td and "Relator" in td.get_text():
+                        partes.append(f"**{td.get_text(strip=True)}**")
 
-    # Fallback: extrai por blocos de texto com número de processo
-    if not decisoes:
-        texto_total = soup.get_text(separator="\n", strip=True)
-        linhas = [l.strip() for l in texto_total.splitlines() if len(l.strip()) > 10]
-        bloco_fb: list[str] = []
-        for linha in linhas:
-            if padrao_processo.search(linha):
-                if bloco_fb:
-                    decisoes.append("\n".join(bloco_fb))
-                num = len(decisoes) + 1
-                bloco_fb = [f"[{num}] {linha}"]
-            elif bloco_fb:
-                bloco_fb.append(linha)
-        if bloco_fb:
-            decisoes.append("\n".join(bloco_fb))
+                elif cur.name == "div":
+                    texto = cur.get_text(separator=" ", strip=True)
+                    style = cur.get("style", "")
+                    classes = cur.get("class") or []
 
-    return decisoes[:100]
+                    if "Data de Julgamento" in texto:
+                        data = re.sub(r".*Data de Julgamento:\s*", "", texto).strip()
+                        partes.append(f"Data: {data}")
+
+                    elif "justify" in style and "corpo" in classes and len(texto) > 40:
+                        ementa = re.sub(r"^\s*Ementa:\s*", "", texto).strip()
+                        # remove highlight HTML artefacts já limpados pelo get_text
+                        partes.append(f"Ementa: {ementa[:800]}")
+                        break  # ementa é o último elemento do bloco
+
+            cur = cur.find_next_sibling()
+            passos += 1
+
+        if numero:
+            decisoes.append("\n".join(partes))
+
+    return decisoes
 
 
 async def _keep_alive():
