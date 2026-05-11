@@ -81,7 +81,9 @@ async def buscar_jurisprudencia_tjmg(
         n_resultados: Quantidade de resultados, máximo 50 (padrão 10)
 
     Returns:
-        Lista de decisões com número do processo, relator, data e ementa.
+        Lista numerada de decisões (ex: [1], [2]...) com processo, relator e ementa.
+        Use obter_inteiro_teor_tjmg com os mesmos parâmetros e numero_resultado=N
+        para ler o voto completo de um resultado específico.
     """
     if not OCR_DISPONIVEL:
         return (
@@ -228,6 +230,135 @@ def _parse_resultados(html: str, palavras: str, escopo: str) -> str:
     return cabecalho + "\n\n---\n\n".join(decisoes)
 
 
+@mcp.tool()
+async def obter_inteiro_teor_tjmg(
+    palavras: str,
+    numero_resultado: int = 1,
+    escopo: str = "camara_e_relator",
+    data_inicio: str = "",
+    data_fim: str = "",
+) -> str:
+    """
+    Obtém o inteiro teor (voto completo) de um acórdão específico do TJMG.
+    Use após buscar_jurisprudencia_tjmg: passe os mesmos termos e o número do resultado desejado.
+
+    Args:
+        palavras: Mesmos termos usados na busca anterior.
+        numero_resultado: Posição do resultado (1 = primeiro, 2 = segundo, etc.)
+        escopo: Mesmo filtro da busca:
+            "camara_e_relator" → 1ª Câmara Cível + Des. Manoel dos Reis Morais (padrão)
+            "relator"          → apenas Des. Manoel dos Reis Morais
+            "camara"           → apenas 1ª Câmara Cível
+            "tjmg"             → todo o TJMG
+        data_inicio: Data inicial dd/MM/yyyy (opcional)
+        data_fim:    Data final dd/MM/yyyy (opcional)
+
+    Returns:
+        Texto completo do acórdão: ementa, relatório, voto e dispositivo.
+    """
+    if not OCR_DISPONIVEL:
+        return "Erro de configuração: biblioteca ddddocr não instalada."
+
+    numero_resultado = max(1, min(numero_resultado, 200))
+
+    params = {
+        "numeroRegistro":        str(numero_resultado),
+        "totalLinhas":           "1",
+        "palavras":              palavras,
+        "pesquisarPor":          "ementa",
+        "orderByData":           "2",
+        "codigoOrgaoJulgador":   "",
+        "listaOrgaoJulgador":    "",
+        "codigoCompostoRelator": "",
+        "listaRelator":          "",
+        "classe":                "",
+        "codigoAssunto":         "",
+        "dataPublicacaoInicial": "",
+        "dataPublicacaoFinal":   "",
+        "dataJulgamentoInicial": data_inicio,
+        "dataJulgamentoFinal":   data_fim,
+        "siglaLegislativa":      "",
+        "referenciaLegislativa": "",
+        "numeroRefLegislativa":  "",
+        "anoRefLegislativa":     "",
+        "legislacao":            "",
+        "norma":                 "",
+        "descNorma":             "",
+        "complemento_1":         "",
+        "listaPesquisa":         "",
+        "descricaoTextosLegais": "",
+        "observacoes":           "",
+        "linhasPorPagina":       "1",
+        "paginaNumero":          str(numero_resultado),
+        "pesquisaPalavras":      "Pesquisar",
+    }
+
+    if escopo in ("camara", "camara_e_relator"):
+        params["listaOrgaoJulgador"] = CAMARA_1_CIVEL
+    if escopo in ("relator", "camara_e_relator"):
+        params["listaRelator"] = RELATOR_MANOEL
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            await client.get(FORM_URL, headers=HEADERS)
+            response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+
+            for _ in range(4):
+                if not _e_pagina_captcha(response.text):
+                    break
+                sucesso = await _resolver_captcha(client)
+                if not sucesso:
+                    await client.get(FORM_URL, headers=HEADERS)
+                response = await client.get(SEARCH_URL, params=params, headers=HEADERS)
+
+            if _e_pagina_captcha(response.text):
+                return "Não foi possível resolver o CAPTCHA após 4 tentativas."
+
+            return _parse_inteiro_teor(response.text, palavras, numero_resultado)
+
+    except httpx.TimeoutException:
+        return "Tempo limite excedido ao consultar o TJMG."
+    except Exception as e:
+        return f"Erro ao obter inteiro teor: {e}"
+
+
+def _parse_inteiro_teor(html: str, palavras: str, numero: int) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+
+    cabecalho = f'Inteiro teor — "{palavras}" [resultado #{numero}]\n{"=" * 60}\n\n'
+
+    # Estratégia 1: div#panel1 → filho direto com text-align:justify
+    panel = soup.find("div", id="panel1")
+    if panel:
+        content_div = panel.find(
+            "div", style=lambda s: s and "justify" in s.lower()
+        )
+        if content_div:
+            return cabecalho + content_div.get_text(separator="\n", strip=True)
+        texto_panel = panel.get_text(separator="\n", strip=True)
+        if len(texto_panel) > 300:
+            return cabecalho + texto_panel
+
+    # Estratégia 2: qualquer div com text-align:justify
+    for tag in soup(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    justify_divs = soup.find_all(
+        "div", style=lambda s: s and "justify" in s.lower()
+    )
+    blocos = [d.get_text(separator="\n", strip=True) for d in justify_divs]
+    blocos = [b for b in blocos if len(b) > 200]
+    if blocos:
+        return cabecalho + "\n\n---\n\n".join(blocos[:5])
+
+    # Estratégia 3: texto completo da página
+    texto = soup.get_text(separator="\n", strip=True)
+    linhas = [l.strip() for l in texto.splitlines() if len(l.strip()) > 5]
+    texto_limpo = "\n".join(linhas)
+    if len(texto_limpo) > 200:
+        return cabecalho + texto_limpo[:10000]
+    return cabecalho + "Nenhum conteúdo encontrado."
+
+
 def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
     decisoes: list[str] = []
     bloco: list[str] = []
@@ -242,7 +373,8 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
         if padrao_processo.search(texto):
             if bloco:
                 decisoes.append("\n".join(bloco))
-            bloco = [f"**Processo:** {texto}"]
+            num = len(decisoes) + 1
+            bloco = [f"**[{num}] Processo:** {texto}"]
 
         elif bloco and any(k in texto.upper() for k in ("RELATOR", "RELATORA")):
             bloco.append(f"**{texto}**")
@@ -262,7 +394,8 @@ def _extrair_decisoes(soup: BeautifulSoup) -> list[str]:
             if padrao_processo.search(linha):
                 if bloco_fb:
                     decisoes.append("\n".join(bloco_fb))
-                bloco_fb = [linha]
+                num = len(decisoes) + 1
+                bloco_fb = [f"[{num}] {linha}"]
             elif bloco_fb:
                 bloco_fb.append(linha)
         if bloco_fb:
