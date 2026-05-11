@@ -288,14 +288,25 @@ async def _keep_alive():
 
 
 class _HealthASGI:
-    """Middleware ASGI puro — responde /health sem bufferizar o streaming do MCP."""
+    """Middleware ASGI puro — responde /health e corrige Host header para o FastMCP.
+
+    O MCP SDK rejeita hosts externos com 421 (proteção anti-DNS-rebinding).
+    Patchamos o Host para 'localhost' antes de entregar ao FastMCP — a validação
+    de segurança passa e o streaming SSE nunca é bufferizado.
+    """
 
     def __init__(self, app):
         self.app = app
-        self._health_body = b'{"status":"ok","server":"TJMG Jurisprud\\u00eancia MCP"}'
+        self._health_body = b'{"status":"ok","server":"TJMG Jurisprud\xc3\xaancia MCP"}'
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http" and scope.get("path") in ("/", "/health"):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+
+        if path in ("/", "/health"):
             await send({
                 "type": "http.response.start",
                 "status": 200,
@@ -305,8 +316,14 @@ class _HealthASGI:
                 ],
             })
             await send({"type": "http.response.body", "body": self._health_body})
-        else:
-            await self.app(scope, receive, send)
+            return
+
+        # Patcha o Host para localhost antes de chegar na validação do FastMCP
+        headers = [
+            (b"host", b"localhost") if name.lower() == b"host" else (name, value)
+            for name, value in scope.get("headers", [])
+        ]
+        await self.app({**scope, "headers": headers}, receive, send)
 
 
 if __name__ == "__main__":
