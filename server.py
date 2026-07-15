@@ -160,10 +160,20 @@ def _tipo_texto(tipo: str) -> str:
     return "EMENTA"
 
 
+def _parse_numeros_processo(numero_processo: str) -> list[str]:
+    """Aceita um ou mais números (separados por vírgula/espaço), com ou sem
+    pontuação — a API quer só dígitos, na numeração interna do Tribunal
+    (13 dígitos p/ processo físico de 1ª instância, ou 17 p/ 2ª instância)."""
+    import re
+    brutos = re.split(r"[,\s]+", (numero_processo or "").strip())
+    return [re.sub(r"\D", "", n) for n in brutos if re.sub(r"\D", "", n)]
+
+
 def _build_filtro(
     palavras: str, magistrados: list[str], orgaos: list[str],
     classes: list[str], tipo_texto: str,
     data_inicio: str, data_fim: str,
+    numeros_processo: list[str] | None = None,
 ) -> dict:
     corpo: dict = {}
     if magistrados:
@@ -172,6 +182,8 @@ def _build_filtro(
         corpo["orgaosJulgadores"] = orgaos
     if classes:
         corpo["classes"] = classes
+    if numeros_processo:
+        corpo["numerosProcessos"] = numeros_processo
     if palavras.strip():
         corpo["texto"] = palavras.strip()
         corpo["tipoTexto"] = tipo_texto
@@ -188,7 +200,7 @@ def _build_filtro(
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True, idempotentHint=True))
 async def buscar_jurisprudencia_tjmg(
-    palavras: str,
+    palavras: str = "",
     escopo: str = "marcelo,manoel",
     tipo_texto: str = "ementa",
     classe: str = "apelacao",
@@ -197,12 +209,18 @@ async def buscar_jurisprudencia_tjmg(
     n_resultados: int = 20,
     ordenar: str = "recentes",
     pagina: int = 0,
+    numero_processo: str = "",
 ) -> str:
     """
     Busca jurisprudência na NOVA base do TJMG (consulta-jurisprudencia.tjmg.jus.br).
     Sem CAPTCHA — resposta rápida e estruturada. A ementa já vem no resultado.
 
     Args:
+        numero_processo: número(s) de processo, na numeração interna do Tribunal
+            (13 dígitos p/ 1ª instância ou 17 p/ 2ª instância — ex.: "10000250644614001"),
+            com ou sem pontuação. Vários números separados por vírgula ou espaço.
+            NÃO é o número CNJ completo nem o `id_documento`. Quando informado,
+            localiza o(s) processo(s) diretamente — ignora `palavras` se ela vier vazia.
         palavras: Termos de busca. O campo aceita OPERADORES (motor Elasticsearch) —
             use-os para precisão:
               "frase exata"          → aspas para expressão literal. Ex.: "responsabilidade objetiva"
@@ -240,11 +258,20 @@ async def buscar_jurisprudencia_tjmg(
     n_resultados = max(1, min(n_resultados, 50))
     pagina = max(0, pagina)
 
-    magistrados, orgaos, avisos = _parse_escopo(escopo)
-    classes = _resolver_classes(classe)
+    numeros_processo = _parse_numeros_processo(numero_processo)
+    # Busca por número é uma localização exata — não faz sentido restringir
+    # por relator/câmara/classe default junto (o processo pode ser de
+    # qualquer um deles); ignora esses filtros quando o número é informado.
+    if numeros_processo:
+        magistrados, orgaos, avisos = [], [], []
+        classes: list[str] = []
+    else:
+        magistrados, orgaos, avisos = _parse_escopo(escopo)
+        classes = _resolver_classes(classe)
     corpo = _build_filtro(
         palavras, magistrados, orgaos, classes,
         _tipo_texto(tipo_texto), data_inicio, data_fim,
+        numeros_processo=numeros_processo,
     )
 
     params = {"size": str(n_resultados), "page": str(pagina)}
